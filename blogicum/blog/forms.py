@@ -1,3 +1,4 @@
+"""Формы приложения blog."""
 from django import forms
 from django.contrib.auth import get_user_model
 
@@ -7,6 +8,8 @@ User = get_user_model()
 
 
 class PostForm(forms.ModelForm):
+    """Форма создания и редактирования публикации."""
+
     class Meta:
         model = Post
         exclude = ('author',)
@@ -19,12 +22,16 @@ class PostForm(forms.ModelForm):
 
 
 class CommentForm(forms.ModelForm):
+    """Форма создания и редактирования комментария."""
+
     class Meta:
         model = Comment
         fields = ('text',)
 
 
 class ProfileForm(forms.ModelForm):
+    """Форма редактирования данных профиля пользователя."""
+
     class Meta:
         model = User
         fields = ('first_name', 'last_name', 'username', 'email')

@@ -1,3 +1,4 @@
+"""Представления приложения blog: публикации, комментарии, профиль."""
 from django.contrib.auth import get_user_model
 from django.contrib.auth.mixins import LoginRequiredMixin
 from django.db.models import Count
@@ -21,7 +22,13 @@ POSTS_PER_PAGE = 10
 
 
 def get_post_list(author=None, category=None, only_published=True):
-    """Базовая выборка публикаций с подсчётом комментариев."""
+    """Вернуть выборку публикаций с подсчётом комментариев.
+
+    По умолчанию отдаёт только опубликованные посты опубликованных
+    категорий с уже наступившей датой публикации. Опционально
+    фильтрует по автору и/или категории и аннотирует число
+    комментариев, сортируя посты от новых к старым.
+    """
     posts = Post.objects.select_related('author', 'category', 'location')
     if only_published:
         posts = posts.filter(
@@ -39,6 +46,8 @@ def get_post_list(author=None, category=None, only_published=True):
 
 
 class IndexListView(ListView):
+    """Главная страница: лента опубликованных публикаций."""
+
     template_name = 'blog/index.html'
     paginate_by = POSTS_PER_PAGE
 
@@ -47,10 +56,13 @@ class IndexListView(ListView):
 
 
 class CategoryListView(ListView):
+    """Публикации выбранной опубликованной категории."""
+
     template_name = 'blog/category.html'
     paginate_by = POSTS_PER_PAGE
 
     def get_category(self):
+        """Вернуть опубликованную категорию или вернуть 404."""
         return get_object_or_404(
             Category,
             slug=self.kwargs['category_slug'],
@@ -67,10 +79,13 @@ class CategoryListView(ListView):
 
 
 class ProfileListView(ListView):
+    """Страница пользователя со списком его публикаций."""
+
     template_name = 'blog/profile.html'
     paginate_by = POSTS_PER_PAGE
 
     def get_author(self):
+        """Вернуть пользователя по username или вернуть 404."""
         return get_object_or_404(User, username=self.kwargs['username'])
 
     def get_queryset(self):
@@ -87,10 +102,13 @@ class ProfileListView(ListView):
 
 
 class PostDetailView(DetailView):
+    """Отдельная публикация с формой и списком комментариев."""
+
     template_name = 'blog/detail.html'
     pk_url_kwarg = 'post_id'
 
     def get_object(self):
+        """Автор видит свой пост всегда, остальные — только опубликованный."""
         post = get_object_or_404(Post, pk=self.kwargs['post_id'])
         if post.author != self.request.user:
             post = get_object_or_404(
@@ -106,6 +124,8 @@ class PostDetailView(DetailView):
 
 
 class EditProfileView(LoginRequiredMixin, UpdateView):
+    """Редактирование данных собственного профиля."""
+
     model = User
     form_class = ProfileForm
     template_name = 'blog/user.html'
@@ -120,10 +140,30 @@ class EditProfileView(LoginRequiredMixin, UpdateView):
         )
 
 
-class PostCreateView(LoginRequiredMixin, CreateView):
+class PostMixin:
+    """Общие настройки представлений публикаций."""
+
     model = Post
     form_class = PostForm
     template_name = 'blog/create.html'
+    pk_url_kwarg = 'post_id'
+
+
+class PostAuthorRequiredMixin(LoginRequiredMixin):
+    """Изменять и удалять пост может только его автор.
+
+    Неавтор перенаправляется на страницу просмотра публикации.
+    """
+
+    def dispatch(self, request, *args, **kwargs):
+        post = get_object_or_404(Post, pk=kwargs['post_id'])
+        if post.author != request.user:
+            return redirect('blog:post_detail', post_id=post.pk)
+        return super().dispatch(request, *args, **kwargs)
+
+
+class PostCreateView(LoginRequiredMixin, PostMixin, CreateView):
+    """Создание новой публикации авторизованным пользователем."""
 
     def form_valid(self, form):
         form.instance.author = self.request.user
@@ -136,17 +176,8 @@ class PostCreateView(LoginRequiredMixin, CreateView):
         )
 
 
-class PostUpdateView(LoginRequiredMixin, UpdateView):
-    model = Post
-    form_class = PostForm
-    template_name = 'blog/create.html'
-    pk_url_kwarg = 'post_id'
-
-    def dispatch(self, request, *args, **kwargs):
-        post = get_object_or_404(Post, pk=kwargs['post_id'])
-        if post.author != request.user:
-            return redirect('blog:post_detail', post_id=post.pk)
-        return super().dispatch(request, *args, **kwargs)
+class PostUpdateView(PostAuthorRequiredMixin, PostMixin, UpdateView):
+    """Редактирование публикации её автором."""
 
     def get_success_url(self):
         return reverse(
@@ -155,25 +186,21 @@ class PostUpdateView(LoginRequiredMixin, UpdateView):
         )
 
 
-class PostDeleteView(LoginRequiredMixin, DeleteView):
-    model = Post
-    template_name = 'blog/create.html'
-    pk_url_kwarg = 'post_id'
-    success_url = reverse_lazy('blog:index')
+class PostDeleteView(PostAuthorRequiredMixin, PostMixin, DeleteView):
+    """Удаление публикации её автором с подтверждением."""
 
-    def dispatch(self, request, *args, **kwargs):
-        post = get_object_or_404(Post, pk=kwargs['post_id'])
-        if post.author != request.user:
-            return redirect('blog:post_detail', post_id=post.pk)
-        return super().dispatch(request, *args, **kwargs)
+    success_url = reverse_lazy('blog:index')
 
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
+        # Форма нужна шаблону, чтобы показать удаляемую публикацию.
         context['form'] = PostForm(instance=self.object)
         return context
 
 
 class CommentCreateView(LoginRequiredMixin, CreateView):
+    """Добавление комментария к публикации."""
+
     model = Comment
     form_class = CommentForm
     template_name = 'blog/comment.html'
@@ -195,6 +222,11 @@ class CommentCreateView(LoginRequiredMixin, CreateView):
 
 
 class CommentMixin(LoginRequiredMixin):
+    """Изменять и удалять комментарий может только его автор.
+
+    Неавтор перенаправляется на страницу просмотра публикации.
+    """
+
     model = Comment
     template_name = 'blog/comment.html'
     pk_url_kwarg = 'comment_id'
@@ -213,8 +245,10 @@ class CommentMixin(LoginRequiredMixin):
 
 
 class CommentUpdateView(CommentMixin, UpdateView):
+    """Редактирование собственного комментария."""
+
     form_class = CommentForm
 
 
 class CommentDeleteView(CommentMixin, DeleteView):
-    pass
+    """Удаление собственного комментария с подтверждением."""
